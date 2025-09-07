@@ -1,0 +1,5 @@
+{
+  "name": "TCG Card Game Generator",
+  "description": "An application that generates a complete, printable trading card game based on a user-provided theme, including rules and visually designed cards with AI-generated artwork.",
+  "requestFramePermissions": []
+}
