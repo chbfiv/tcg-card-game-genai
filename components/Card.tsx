@@ -10,6 +10,7 @@ import DotsVerticalIcon from './icons/DotsVerticalIcon';
 interface CardProps {
   card: CardData;
   isDevMode: boolean;
+  shards: number;
   onRegenerateImage: (cardId: string) => void;
   onRegenerateText: (cardId: string) => void;
 }
@@ -21,7 +22,7 @@ const cardTypeColors = {
   Environment: 'from-green-500 to-green-800',
 };
 
-const Card: React.FC<CardProps> = ({ card, isDevMode, onRegenerateImage, onRegenerateText }) => {
+const Card: React.FC<CardProps> = ({ card, isDevMode, shards, onRegenerateImage, onRegenerateText }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const bgColor = cardTypeColors[card.type] || 'from-purple-500 to-purple-800';
@@ -50,8 +51,9 @@ const Card: React.FC<CardProps> = ({ card, isDevMode, onRegenerateImage, onRegen
             <p className="text-sm mb-2">Image failed</p>
             <button
               onClick={() => onRegenerateImage(card.id)}
-              className="bg-red-500 hover:bg-red-600 text-white font-bold p-2 rounded-full transition-colors"
-              title="Retry Image Generation"
+              className="bg-red-500 hover:bg-red-600 text-white font-bold p-2 rounded-full transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed"
+              title={shards > 0 ? "Retry Image Generation (1 Shard)" : "Not enough shards"}
+              disabled={shards < 1}
             >
               <RetryIcon className="w-6 h-6" />
             </button>
@@ -77,9 +79,21 @@ const Card: React.FC<CardProps> = ({ card, isDevMode, onRegenerateImage, onRegen
             <DotsVerticalIcon className="w-5 h-5 text-white" />
           </button>
           {isMenuOpen && (
-            <div className="absolute right-0 mt-2 w-48 bg-gray-800 border border-gray-600 rounded-md shadow-lg py-1">
-              <button onClick={() => { onRegenerateImage(card.id); setIsMenuOpen(false); }} className="block w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-indigo-600">Regenerate Image</button>
-              <button onClick={() => { onRegenerateText(card.id); setIsMenuOpen(false); }} className="block w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-indigo-600">Regenerate Text</button>
+            <div className="absolute right-0 mt-2 w-52 bg-gray-800 border border-gray-600 rounded-md shadow-lg py-1">
+              <button 
+                onClick={() => { onRegenerateImage(card.id); setIsMenuOpen(false); }} 
+                className="block w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-indigo-600 disabled:text-gray-500 disabled:hover:bg-gray-800 disabled:cursor-not-allowed"
+                disabled={shards < 1}
+              >
+                Regenerate Image (1 Shard)
+              </button>
+              <button 
+                onClick={() => { onRegenerateText(card.id); setIsMenuOpen(false); }} 
+                className="block w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-indigo-600 disabled:text-gray-500 disabled:hover:bg-gray-800 disabled:cursor-not-allowed"
+                disabled={shards < 1}
+              >
+                Regenerate Text (1 Shard)
+              </button>
             </div>
           )}
         </div>

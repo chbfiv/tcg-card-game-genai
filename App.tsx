@@ -5,6 +5,10 @@ import type { CardData, GameData } from './types';
 import { generateGameContent, generateCardImage, regenerateCardText, generateInitialTheme } from './services/geminiService';
 import Card from './components/Card';
 import LoadingSpinner from './components/LoadingSpinner';
+import ShardIcon from './components/icons/ShardIcon';
+import ShardStoreModal from './components/ShardStoreModal';
+
+const SHARD_STORAGE_KEY = 'tcg-generator-shards';
 
 const App: React.FC = () => {
   const [themeTitle, setThemeTitle] = useState<string>('');
@@ -24,7 +28,17 @@ const App: React.FC = () => {
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [isDevMode, setIsDevMode] = useState<boolean>(false);
 
+  const [shards, setShards] = useState<number>(() => {
+    const savedShards = localStorage.getItem(SHARD_STORAGE_KEY);
+    return savedShards ? parseInt(savedShards, 10) : 200;
+  });
+  const [isStoreOpen, setIsStoreOpen] = useState<boolean>(false);
+
   const rulesRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(SHARD_STORAGE_KEY, shards.toString());
+  }, [shards]);
 
   useEffect(() => {
     const fetchDefaults = async () => {
@@ -52,26 +66,41 @@ const App: React.FC = () => {
 
   const generateAllCardImages = useCallback(async (currentCards: CardData[], currentThemeTitle: string) => {
     setIsGeneratingImages(true);
+    let shardsAvailable = shards;
 
     for (let i = 0; i < currentCards.length; i++) {
         const card = currentCards[i];
         if (card.imageState !== 'pending') continue;
+
+        if (shardsAvailable < 1) {
+            setError('Ran out of Image Shards. Image generation paused. You can retry individual cards later.');
+            setCards(prev => prev.map(c => (c.id === card.id ? { ...c, imageState: 'error' } : c)));
+            continue;
+        }
         
+        shardsAvailable--;
+        setShards(prev => prev - 1);
         setCards(prev => prev.map(c => c.id === card.id ? { ...c, imageState: 'loading' } : c));
+        
         try {
             const imageUrl = await generateCardImage(card.imagePrompt, currentThemeTitle);
             setCards(prev => prev.map(c => c.id === card.id ? { ...c, imageState: 'success', imageUrl } : c));
         } catch (err: any) {
             console.error(`Failed to generate image for ${card.name}:`, err);
             setCards(prev => prev.map(c => c.id === card.id ? { ...c, imageState: 'error' } : c));
+            setShards(prev => prev + 1); // Refund shard on failure
+            shardsAvailable++;
+
             if (err?.message?.includes('RESOURCE_EXHAUSTED') || err?.error?.status === 'RESOURCE_EXHAUSTED') {
-                setError('API rate limit reached. Image generation paused. You can retry individual cards later.');
+                setError('API rate limit reached. Image generation paused. Your shard has been refunded.');
                 break;
+            } else {
+                 setError('An error occurred during image generation. Your shard has been refunded.');
             }
         }
     }
     setIsGeneratingImages(false);
-  }, []);
+  }, [shards]);
   
   const handleGenerate = useCallback(async () => {
     const inputs = [themeTitle, themeDescription, setName, factions, locations, resources];
@@ -98,9 +127,14 @@ const App: React.FC = () => {
   }, [themeTitle, themeDescription, setName, factions, locations, resources, numCards, generateAllCardImages]);
 
   const handleRegenerateImage = useCallback(async (cardId: string) => {
+    if (shards < 1) {
+      setError("You need at least 1 Image Shard to generate an image.");
+      return;
+    }
     const card = cards.find(c => c.id === cardId);
     if (!card) return;
 
+    setShards(prev => prev - 1); // Consume shard
     setCards(prev => prev.map(c => c.id === cardId ? { ...c, imageState: 'loading' } : c));
     try {
       const imageUrl = await generateCardImage(card.imagePrompt, themeTitle);
@@ -108,11 +142,16 @@ const App: React.FC = () => {
     } catch (err) {
       console.error(`Failed to regenerate image for ${card.name}:`, err);
       setCards(prev => prev.map(c => c.id === cardId ? { ...c, imageState: 'error' } : c));
-      setError('Failed to regenerate image. API limits may have been reached.');
+      setShards(prev => prev + 1); // Refund shard
+      setError('Failed to regenerate image. Your shard has been refunded.');
     }
-  }, [cards, themeTitle]);
+  }, [cards, themeTitle, shards]);
 
   const handleRegenerateText = useCallback(async (cardId: string) => {
+    if (shards < 1) {
+      setError("You need at least 1 Image Shard for the subsequent image generation.");
+      return;
+    }
     const card = cards.find(c => c.id === cardId);
     if (!card) return;
     
@@ -133,7 +172,7 @@ const App: React.FC = () => {
         setError("Failed to regenerate card text.");
         setCards(prev => prev.map(c => c.id === cardId ? originalCard : c));
     }
-  }, [cards, themeDescription, factions, locations, resources, handleRegenerateImage]);
+  }, [cards, themeDescription, factions, locations, resources, handleRegenerateImage, shards]);
 
   const handleDownloadPdf = async () => {
     if (!rules || cards.length === 0 || !rulesRef.current) {
@@ -147,28 +186,26 @@ const App: React.FC = () => {
     const cardWidth = 63;
     const cardHeight = 88;
     const cardsPerPage = 9;
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
     
     // 1. Add Rules
     const rulesCanvas = await html2canvas(rulesRef.current, { scale: 2 });
     const rulesImgData = rulesCanvas.toDataURL('image/png');
     const rulesImgProps = pdf.getImageProperties(rulesImgData);
-    const rulesPdfWidth = pdfWidth - (margin * 2);
+    const rulesPdfWidth = pdf.internal.pageSize.getWidth() - (margin * 2);
     const rulesPdfHeight = (rulesImgProps.height * rulesPdfWidth) / rulesImgProps.width;
     pdf.addImage(rulesImgData, 'PNG', margin, margin, rulesPdfWidth, rulesPdfHeight);
 
     // 2. Add Cards
     for (let i = 0; i < cards.length; i++) {
         const cardIndexOnPage = i % cardsPerPage;
-        if (cardIndexOnPage === 0) {
+        if (i > 0 && cardIndexOnPage === 0) {
             pdf.addPage();
         }
 
         const cardElement = document.getElementById(cards[i].id);
         if (cardElement) {
-            const cardCanvas = await html2canvas(cardElement, { scale: 3 }); // Higher scale for better quality
-            const cardImgData = cardCanvas.toDataURL('image/jpeg', 0.9); // Use jpeg for smaller file size
+            const cardCanvas = await html2canvas(cardElement, { scale: 3 });
+            const cardImgData = cardCanvas.toDataURL('image/jpeg', 0.9);
 
             const row = Math.floor(cardIndexOnPage / 3);
             const col = cardIndexOnPage % 3;
@@ -201,17 +238,35 @@ const App: React.FC = () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  const handleAddShards = () => {
+    setShards(prev => prev + 100);
+  };
   
   const commonInputClass = "bg-gray-700 border-2 border-gray-600 text-white rounded-lg p-3 w-full focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition disabled:bg-gray-800 disabled:cursor-not-allowed";
   const anyLoading = isLoading || isGeneratingImages || isGeneratingPdf;
 
   return (
     <>
+      <ShardStoreModal isOpen={isStoreOpen} onClose={() => setIsStoreOpen(false)} />
       {(isLoading || isGeneratingPdf) && <LoadingSpinner message={loadingMessage || (isGeneratingPdf ? 'Generating Printable PDF...' : '')} />}
 
       <main className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
+        <div className="absolute top-4 right-4 sm:top-6 sm:right-8 flex items-center gap-4 z-10">
+          <div className="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-lg shadow-md border border-gray-700">
+            <ShardIcon className="w-6 h-6 text-cyan-400" />
+            <span className="text-xl font-bold text-white">{shards}</span>
+          </div>
+          <button
+            onClick={() => setIsStoreOpen(true)}
+            className="bg-gradient-to-r from-cyan-500 to-teal-500 text-white font-bold py-2 px-4 rounded-lg hover:from-cyan-600 hover:to-teal-600 transition-all transform hover:scale-105"
+          >
+            Get Shards
+          </button>
+        </div>
+
         <div className="container mx-auto">
-          <header className="text-center mb-8">
+          <header className="text-center mb-8 pt-16 sm:pt-0">
             <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-600">
               TCG Card Game Generator
             </h1>
@@ -276,7 +331,10 @@ const App: React.FC = () => {
                <div className="flex items-center space-x-2 text-gray-400">
                 <input type="checkbox" id="devMode" checked={isDevMode} onChange={() => setIsDevMode(!isDevMode)} className="form-checkbox h-5 w-5 text-indigo-600 bg-gray-700 border-gray-600 rounded focus:ring-indigo-500" />
                 <label htmlFor="devMode">Dev Mode</label>
-              </div>
+               </div>
+               {isDevMode && (
+                  <button onClick={handleAddShards} className="bg-yellow-500 text-black font-bold py-2 px-4 rounded-lg hover:bg-yellow-600 transition-colors">Add 100 Shards</button>
+               )}
             </div>
           )}
 
@@ -296,7 +354,7 @@ const App: React.FC = () => {
               <h2 className="text-3xl font-bold mb-8 text-center">Generated Cards</h2>
               <div className="flex flex-wrap justify-center gap-8">
                 {cards.map((card) => (
-                  <Card key={card.id} card={card} isDevMode={isDevMode} onRegenerateImage={handleRegenerateImage} onRegenerateText={handleRegenerateText} />
+                  <Card key={card.id} card={card} isDevMode={isDevMode} shards={shards} onRegenerateImage={handleRegenerateImage} onRegenerateText={handleRegenerateText} />
                 ))}
               </div>
             </div>
